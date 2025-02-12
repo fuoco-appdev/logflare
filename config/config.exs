@@ -45,7 +45,11 @@ config :logflare, LogflareWeb.Endpoint,
       ]
     ]
   ],
-  url: [host: "localhost", scheme: "http", port: 4000],
+  url: [
+    host: System.get_env("HOST", "localhost"), 
+    scheme: "http", 
+    port: System.get_env("PORT", "4000") |> String.to_integer()
+  ],
   secret_key_base: "DSzZYeAgGaXlfRXPQqMOPiA8hJOYSImhnR2lO8lREOE2vWDmkGn1XWHxoCZoASlP",
   render_errors: [view: LogflareWeb.ErrorView, accepts: ~w(html json)],
   pubsub_server: Logflare.PubSub,
