@@ -46,9 +46,9 @@ config :logflare, LogflareWeb.Endpoint,
     ]
   ],
   url: [
-    host: System.get_env("HOST", "localhost"), 
+    host: System.get_env("HOST") || "localhost", 
     scheme: "http", 
-    port: System.get_env("PORT", "4000") |> String.to_integer()
+    port: System.get_env("PORT") || 4000
   ],
   secret_key_base: "DSzZYeAgGaXlfRXPQqMOPiA8hJOYSImhnR2lO8lREOE2vWDmkGn1XWHxoCZoASlP",
   render_errors: [view: LogflareWeb.ErrorView, accepts: ~w(html json)],
