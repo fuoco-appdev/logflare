@@ -142,6 +142,7 @@ defmodule Logflare.Sql do
     source_mapping = source_mapping(sources)
 
     with {:ok, statements} <- Parser.parse("bigquery", query),
+         {:ok, sandboxed_query_ast} <- sandboxed_ast(sandboxed_query, "bigquery"),
          data = %{
            logflare_project_id: Application.get_env(:logflare, Logflare.Google)[:project_id],
            user_project_id: user_project_id,
@@ -151,12 +152,11 @@ defmodule Logflare.Sql do
            source_mapping: source_mapping,
            source_names: Map.keys(source_mapping),
            sandboxed_query: sandboxed_query,
-           sandboxed_query_ast: nil,
+           sandboxed_query_ast: sandboxed_query_ast,
            ast: statements,
            dialect: "bigquery"
          },
          :ok <- validate_query(statements, data),
-         {:ok, sandboxed_query_ast} <- sandboxed_ast(data),
          :ok <- maybe_validate_sandboxed_query_ast({statements, sandboxed_query_ast}, data) do
       data = %{data | sandboxed_query_ast: sandboxed_query_ast}
 
@@ -166,10 +166,10 @@ defmodule Logflare.Sql do
     end
   end
 
-  defp sandboxed_ast(%{sandboxed_query: q, dialect: dialect}) when is_binary(q),
-    do: Parser.parse(dialect, q)
+  defp sandboxed_ast(query, dialect) when is_binary(query),
+    do: Parser.parse(dialect, query)
 
-  defp sandboxed_ast(_), do: {:ok, nil}
+  defp sandboxed_ast(_, _), do: {:ok, nil}
 
   @doc """
   Performs a check if a query contains a CTE. returns true if it is, returns false if not
@@ -178,7 +178,7 @@ defmodule Logflare.Sql do
     opts = Enum.into(opts, %{dialect: "bigquery"})
 
     with {:ok, ast} <- Parser.parse(opts.dialect, query),
-         [_ | _] <- extract_cte_alises(ast) do
+         [_ | _] <- extract_cte_aliases(ast) do
       true
     else
       _ -> false
@@ -215,10 +215,14 @@ defmodule Logflare.Sql do
          source_names: source_names,
          user_project_id: user_project_id,
          logflare_project_id: logflare_project_id,
+         sandboxed_query_ast: sandboxed_query_ast,
          ast: ast
        })
        when is_list(name) do
-    cte_names = extract_cte_alises(ast)
+    cte_names = extract_cte_aliases(ast)
+
+    sandboxed_cte_names =
+      if sandboxed_query_ast, do: extract_cte_aliases(sandboxed_query_ast), else: []
 
     table_names = for %{"value" => table_name} <- name, do: table_name
 
@@ -227,6 +231,9 @@ defmodule Logflare.Sql do
     |> Enum.reject(fn name ->
       cond do
         name in cte_names ->
+          true
+
+        name in sandboxed_cte_names ->
           true
 
         name in source_names ->
@@ -346,11 +353,14 @@ defmodule Logflare.Sql do
         table_alias
       end
 
+    sandboxed_cte_names = extract_cte_aliases(ast)
+
     unknown_table_names =
       for statement <- ast,
-          from <- get_in(statement, ["Query", "body", "Select", "from"]),
+          from <- extract_all_from(statement),
           %{"value" => table_name} <- get_in(from, ["relation", "Table", "name"]),
-          table_name not in aliases do
+          table_name not in aliases,
+          table_name not in sandboxed_cte_names do
         table_name
       end
 
@@ -473,9 +483,14 @@ defmodule Logflare.Sql do
       sandboxed_statements
       |> List.first()
       |> get_in(["Query"])
-      |> Map.drop(["with"])
 
-    {k, Map.merge(sandbox_query, replacement_query)}
+    if replacement_query["with"] do
+      # if the replacement query has a with clause, nest it in a Query node
+      {k, Map.merge(sandbox_query, %{"body" => %{"Query" => replacement_query}})}
+    else
+      # if the replacement query does not have a with clause, just drop the with clause
+      {k, Map.merge(sandbox_query, Map.drop(replacement_query, ["with"]))}
+    end
   end
 
   defp replace_sandboxed_query({k, v}, data) when is_list(v) or is_map(v) do
@@ -570,7 +585,7 @@ defmodule Logflare.Sql do
          ast: ast
        })
        when is_list(name) do
-    cte_names = extract_cte_alises(ast)
+    cte_names = extract_cte_aliases(ast)
 
     new_names =
       for %{"value" => table_name} <- name,
@@ -594,7 +609,7 @@ defmodule Logflare.Sql do
 
   defp find_all_source_names(_kv, acc, _data), do: acc
 
-  defp extract_cte_alises(ast) do
+  defp extract_cte_aliases(ast) do
     for statement <- ast,
         %{"alias" => %{"name" => %{"value" => cte_name}}} <-
           get_in(statement, ["Query", "with", "cte_tables"]) || [] do
@@ -719,6 +734,25 @@ defmodule Logflare.Sql do
   end
 
   defp extract_all_parameters(_kv, acc), do: acc
+
+  defp extract_all_from(ast), do: extract_all_from(ast, [])
+
+  defp extract_all_from({"from", from}, acc) when is_list(from) do
+    from ++ acc
+  end
+
+  defp extract_all_from(kv, acc) when is_list(kv) or is_map(kv) do
+    kv
+    |> Enum.reduce(acc, fn kv, nested_acc ->
+      extract_all_from(kv, nested_acc)
+    end)
+  end
+
+  defp extract_all_from({_k, v}, acc) when is_list(v) or is_map(v) do
+    extract_all_from(v, acc)
+  end
+
+  defp extract_all_from(_kv, acc), do: acc
 
   # returns true if the name is fully qualified and has the project id prefix.
   defp is_project_fully_qualified_name(_table_name, nil), do: false
@@ -1003,7 +1037,7 @@ defmodule Logflare.Sql do
     alias_path_mappings = get_bq_alias_path_mappings(ast)
 
     # create mapping of cte tables to field aliases
-    cte_table_names = extract_cte_alises([ast])
+    cte_table_names = extract_cte_aliases([ast])
     cte_tables_tree = get_in(ast, ["Query", "with", "cte_tables"])
 
     # TOOD: refactor

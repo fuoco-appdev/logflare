@@ -7,11 +7,14 @@ defmodule Logflare.Alerting do
   alias Logflare.Repo
 
   require Logger
+  alias Logflare.Backends
+  alias Logflare.Backends.Adaptor
   alias Logflare.Backends.Adaptor.WebhookAdaptor
   alias Logflare.Backends.Adaptor.SlackAdaptor
   alias Logflare.Alerting.AlertQuery
   alias Logflare.User
   alias Logflare.Endpoints
+  alias Logflare.Alerting.AlertsScheduler
   alias Logflare.Cluster
 
   @doc """
@@ -54,7 +57,11 @@ defmodule Logflare.Alerting do
   end
 
   def preload_alert_query(alert) do
-    Repo.preload(alert, [:user])
+    alert
+    |> Repo.preload([:user, :backends])
+    |> then(fn %AlertQuery{backends: backends} = alert ->
+      %{alert | backends: Enum.map(backends, &Backends.typecast_config_string_map_to_atom_map/1)}
+    end)
   end
 
   @doc """
@@ -90,9 +97,18 @@ defmodule Logflare.Alerting do
 
   """
   def update_alert_query(%AlertQuery{} = alert_query, attrs) do
+    backends_modified = if backends = Map.get(attrs, :backends), do: true, else: false
+
     alert_query
-    |> Repo.preload(:user)
+    |> preload_alert_query()
     |> AlertQuery.changeset(attrs)
+    |> then(fn
+      changeset when backends_modified == true ->
+        Ecto.Changeset.put_assoc(changeset, :backends, backends)
+
+      changeset ->
+        changeset
+    end)
     |> Repo.update()
   end
 
@@ -134,10 +150,15 @@ defmodule Logflare.Alerting do
   def get_alert_job(%AlertQuery{id: id}), do: get_alert_job(id)
 
   def get_alert_job(id) do
-    case Logflare.AlertsScheduler.get_job(id) do
-      {_pid, job} -> job
-      nil -> nil
-    end
+    AlertsScheduler.jobs()
+    |> Enum.find_value(fn {_ref,
+                           %Quantum.Job{
+                             task: {_module, _function, [%AlertQuery{id: query_id}, _]}
+                           } = job} ->
+      if query_id == id do
+        job
+      end
+    end)
   end
 
   @doc """
@@ -145,14 +166,18 @@ defmodule Logflare.Alerting do
   """
   @spec upsert_alert_job(AlertQuery.t()) :: {:ok, Citrine.Job.t()}
   def upsert_alert_job(%AlertQuery{} = alert_query) do
-    Logflare.AlertsScheduler.put_job(%Citrine.Job{
-      id: alert_query.id,
-      schedule: alert_query.cron,
-      extended_syntax: false,
-      task: {__MODULE__, :run_alert, [alert_query, :scheduled]}
-    })
+    job = create_alert_job_struct(alert_query)
 
-    {:ok, get_alert_job(alert_query)}
+    :ok = AlertsScheduler.add_job(job)
+
+    {:ok, job}
+  end
+
+  def create_alert_job_struct(alert_query) do
+    AlertsScheduler.new_job(run_strategy: Quantum.RunStrategy.Local)
+    |> Quantum.Job.set_task({__MODULE__, :run_alert, [alert_query, :scheduled]})
+    |> Quantum.Job.set_schedule(Crontab.CronExpression.Parser.parse!(alert_query.cron))
+    |> Quantum.Job.set_name(make_ref())
   end
 
   @doc """
@@ -162,14 +187,9 @@ defmodule Logflare.Alerting do
   def init_alert_jobs do
     AlertQuery
     |> Repo.all()
-    |> Stream.each(fn alert_query ->
-      if get_alert_job(alert_query) == nil do
-        upsert_alert_job(alert_query)
-      end
+    |> Enum.map(fn alert_query ->
+      create_alert_job_struct(alert_query)
     end)
-    |> Stream.run()
-
-    :ok
   end
 
   @doc """
@@ -196,7 +216,7 @@ defmodule Logflare.Alerting do
   end
 
   def run_alert(%AlertQuery{} = alert_query) do
-    alert_query = alert_query |> Repo.preload([:user])
+    alert_query = alert_query |> preload_alert_query()
 
     case execute_alert_query(alert_query) do
       {:ok, [_ | _] = results} ->
@@ -218,6 +238,12 @@ defmodule Logflare.Alerting do
               error_string: inspect(res)
             )
           end
+        end
+
+        # iterate over backends and fire for each
+        for backend <- alert_query.backends do
+          adaptor_mod = Adaptor.get_adaptor(backend)
+          adaptor_mod.send_alert(backend, alert_query, results)
         end
 
         :ok
@@ -247,7 +273,14 @@ defmodule Logflare.Alerting do
   def delete_alert_job(%AlertQuery{id: id}), do: delete_alert_job(id)
 
   def delete_alert_job(alert_id) do
-    Logflare.AlertsScheduler.delete_job(alert_id)
+    job = get_alert_job(alert_id)
+
+    if job do
+      :ok = AlertsScheduler.delete_job(job.name)
+      {:ok, job}
+    else
+      {:error, :not_found}
+    end
   end
 
   @doc """
@@ -288,7 +321,10 @@ defmodule Logflare.Alerting do
              [],
              parameterMode: "NAMED",
              maxResults: 1000,
-             location: alert_query.user.bigquery_dataset_location
+             location: alert_query.user.bigquery_dataset_location,
+             labels: %{
+               "alert_id" => alert_query.id
+             }
            ) do
       {:ok, rows}
     else

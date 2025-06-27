@@ -7,7 +7,13 @@ defmodule LogflareWeb.LogControllerTest do
   alias Logflare.Source.V1SourceSup
   alias Logflare.Sources
   alias Logflare.SystemMetrics.AllLogsLogged
+
   alias Opentelemetry.Proto.Collector.Trace.V1.ExportTraceServiceRequest
+  alias Opentelemetry.Proto.Collector.Trace.V1.ExportTraceServiceResponse
+  alias Opentelemetry.Proto.Collector.Metrics.V1.ExportMetricsServiceRequest
+  alias Opentelemetry.Proto.Collector.Metrics.V1.ExportMetricsServiceResponse
+  alias Opentelemetry.Proto.Collector.Logs.V1.ExportLogsServiceRequest
+  alias Opentelemetry.Proto.Collector.Logs.V1.ExportLogsServiceResponse
 
   @valid %{"some" => "valid log entry", "event_message" => "hi!"}
   @valid_json Jason.encode!(@valid)
@@ -143,12 +149,81 @@ defmodule LogflareWeb.LogControllerTest do
         |> put_req_header("content-type", "application/x-protobuf")
         |> post(Routes.log_path(conn, :otel_traces), body)
 
-      assert json_response(conn, 200) == %{"message" => "Logged!"}
-      assert_receive {^ref, [event1, event2]}, 3000
+      assert protobuf_response(conn, 200, ExportTraceServiceResponse) ==
+               %ExportTraceServiceResponse{partial_success: nil}
+
+      assert_receive {^ref, [event1, event2]}, 4000
 
       assert event1["trace_id"] == event2["trace_id"]
       assert %{"metadata" => _, "event_message" => _} = event1
       assert %{"metadata" => _, "event_message" => _} = event2
+    end
+
+    test ":otel_metrics ingestion", %{conn: conn, source: source, user: user} do
+      this = self()
+      ref = make_ref()
+
+      WebhookAdaptor.Client
+      |> expect(:send, fn req ->
+        send(this, {ref, req[:body]})
+        %Tesla.Env{status: 200, body: ""}
+      end)
+
+      body =
+        TestUtilsGrpc.random_otel_metrics_request()
+        |> ExportMetricsServiceRequest.encode()
+
+      conn =
+        conn
+        |> put_req_header("x-api-key", user.api_key)
+        |> put_req_header("x-source", Atom.to_string(source.token))
+        |> put_req_header("content-type", "application/x-protobuf")
+        |> post(Routes.log_path(conn, :otel_metrics), body)
+
+      assert protobuf_response(conn, 200, ExportMetricsServiceResponse) ==
+               %ExportMetricsServiceResponse{partial_success: nil}
+
+      assert_receive {^ref, data_points}, 4000
+
+      Enum.each(data_points, fn data_point ->
+        assert %{"metadata" => _, "event_message" => _, "metric_type" => _} = data_point
+      end)
+    end
+
+    test ":otel_logs ingestion", %{conn: conn, source: source, user: user} do
+      this = self()
+      ref = make_ref()
+
+      WebhookAdaptor.Client
+      |> expect(:send, fn req ->
+        send(this, {ref, req[:body]})
+        %Tesla.Env{status: 200, body: ""}
+      end)
+
+      body =
+        TestUtilsGrpc.random_otel_logs_request()
+        |> ExportLogsServiceRequest.encode()
+
+      conn =
+        conn
+        |> put_req_header("x-api-key", user.api_key)
+        |> put_req_header("x-source", Atom.to_string(source.token))
+        |> put_req_header("content-type", "application/x-protobuf")
+        |> post(Routes.log_path(conn, :otel_logs), body)
+
+      assert protobuf_response(conn, 200, ExportLogsServiceResponse) ==
+               %ExportLogsServiceResponse{partial_success: nil}
+
+      assert_receive {^ref, logs}, 4000
+
+      Enum.each(logs, fn log ->
+        assert %{
+                 "metadata" => %{"type" => "otel_log"},
+                 "event_message" => _,
+                 "attributes" => _,
+                 "timestamp" => _
+               } = log
+      end)
     end
 
     test "invaild source token uuid checks", %{conn: conn, user: user} do
@@ -474,5 +549,11 @@ defmodule LogflareWeb.LogControllerTest do
     conn
     |> put_req_header("content-type", "application/json")
     |> post(Routes.log_path(conn, :create, source_name: source.name), input)
+  end
+
+  defp protobuf_response(conn, expected_status, protobuf_schema) do
+    body = Phoenix.ConnTest.response(conn, expected_status)
+
+    protobuf_schema.decode(body)
   end
 end

@@ -9,6 +9,18 @@ defmodule Logflare.Logs.OtelTraceTest do
       %{resource_spans: TestUtilsGrpc.random_resource_span(), source: source}
     end
 
+    test "attributes", %{
+      resource_spans: resource_spans,
+      source: source
+    } do
+      [%{"attributes" => a} | _] = OtelTrace.handle_batch(resource_spans, source)
+      assert a != %{}
+      assert Enum.any?(Map.values(a), &is_list/1)
+      assert Enum.any?(Map.values(a), &is_number/1)
+      assert Enum.any?(Map.values(a), &is_binary/1)
+      assert Enum.any?(Map.values(a), &is_boolean/1)
+    end
+
     test "Creates params from a list with one Resource Span that contains an Event", %{
       resource_spans: resource_spans,
       source: source
@@ -25,9 +37,9 @@ defmodule Logflare.Logs.OtelTraceTest do
 
       le_span = Enum.find(batch, fn params -> params["metadata"]["type"] == "span" end)
 
-      assert le_span["trace_id"] == elem(Ecto.UUID.cast(span.trace_id), 1)
-      assert le_span["span_id"] == Base.encode16(span.span_id)
-      assert le_span["parent_span_id"] == Base.encode16(span.parent_span_id)
+      assert le_span["trace_id"] == Base.encode16(span.trace_id, case: :lower)
+      assert le_span["span_id"] == Base.encode16(span.span_id, case: :lower)
+      assert le_span["parent_span_id"] == Base.encode16(span.parent_span_id, case: :lower)
       assert le_span["event_message"] == span.name
 
       assert elem(DateTime.from_iso8601(le_span["timestamp"]), 1) ==

@@ -48,10 +48,14 @@ defmodule Logflare.Factory do
   end
 
   def team_user_factory do
+    email = "#{TestUtils.random_string(8)}@#{TestUtils.random_string()}.com"
+
     %TeamUser{
       name: "some name #{TestUtils.random_string()}",
       team: build(:team),
-      provider: "google"
+      provider: "google",
+      email: email,
+      provider_uid: "provider_uid_#{TestUtils.random_string()}"
     }
   end
 
@@ -92,7 +96,10 @@ defmodule Logflare.Factory do
       rules: attrs[:rules] || [],
       user_id: attrs[:user_id],
       user: attrs[:user],
-      metadata: attrs[:metadata] || nil
+      metadata: attrs[:metadata] || nil,
+      updated_at: attrs[:updated_at],
+      inserted_at: attrs[:inserted_at],
+      alert_queries: attrs[:alert_queries] || []
     }
   end
 
@@ -122,7 +129,8 @@ defmodule Logflare.Factory do
   end
 
   def log_event_factory(attrs) do
-    {source, params} = Map.pop(attrs, :source, build(:source))
+    {source, attrs} = Map.pop(attrs, :source, build(:source))
+    {ingested_at, params} = Map.pop(attrs, :ingested_at)
 
     params =
       for {k, v} <- params, into: %{} do
@@ -147,6 +155,9 @@ defmodule Logflare.Factory do
       |> Map.drop([:metadata, :event_message, :message, :timestamp])
 
     LogEvent.make(params, %{source: source})
+    |> Map.update!(:ingested_at, fn v ->
+      if ingested_at, do: ingested_at, else: v
+    end)
   end
 
   def plan_factory() do
@@ -234,7 +245,7 @@ defmodule Logflare.Factory do
     %OauthAccessToken{
       token: TestUtils.random_string(20),
       resource_owner: build(:user),
-      scopes: "public"
+      scopes: "ingest"
     }
   end
 
@@ -242,7 +253,7 @@ defmodule Logflare.Factory do
     %OauthAccessToken{
       token: TestUtils.random_string(20),
       resource_owner: build(:user),
-      scopes: ~w(public)
+      scopes: ~w(ingest)
     }
   end
 

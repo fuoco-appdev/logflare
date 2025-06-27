@@ -15,6 +15,7 @@ defmodule Logflare.Backends.BufferProducer do
 
   @impl GenStage
   def init(opts) do
+    Process.flag(:trap_exit, true)
     source = Sources.Cache.get_by_id(opts[:source_id])
 
     state = %{
@@ -84,6 +85,16 @@ defmodule Logflare.Backends.BufferProducer do
   end
 
   @impl GenStage
+  def handle_info({:EXIT, _caller_pid, _reason}, state) do
+    table_key = {state.source_id, state.backend_id, self()}
+    startup_table_key = {state.source_id, state.backend_id, nil}
+    # move to startup queue
+    IngestEventQueue.move(table_key, startup_table_key)
+
+    {:noreply, [], state}
+  end
+
+  @impl GenStage
   def handle_demand(demand, state) do
     {items, state} = resolve_demand(state, demand)
     {:noreply, items, state}
@@ -97,19 +108,19 @@ defmodule Logflare.Backends.BufferProducer do
         scale? == false ->
           state.interval
 
-        metrics.avg < 100 ->
+        metrics.avg < 10 ->
           state.interval * 5
 
-        metrics.avg < 1000 ->
+        metrics.avg < 50 ->
           state.interval * 4
 
-        metrics.avg < 2000 ->
+        metrics.avg < 100 ->
           state.interval * 3
 
-        metrics.avg < 3000 ->
+        metrics.avg < 150 ->
           state.interval * 2
 
-        metrics.avg < 4000 ->
+        metrics.avg < 250 ->
           state.interval * 1.5
 
         true ->

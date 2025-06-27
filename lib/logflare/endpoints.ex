@@ -11,6 +11,7 @@ defmodule Logflare.Endpoints do
   alias Logflare.Backends.Adaptor.PostgresAdaptor
   alias Logflare.SingleTenant
   alias Logflare.Alerting
+  alias Logflare.Alerting.Alert
   alias Logflare.Backends
 
   import Ecto.Query
@@ -123,13 +124,21 @@ defmodule Logflare.Endpoints do
   Parses a query string (but does not run it)
 
   ### Example
-    iex> parse_query_string("select @testing from date")
+    iex> parse_query_string("select @testing from date", [], [])
     {:ok, %{parameters: ["testing"]}}
   """
-  @spec parse_query_string(String.t()) :: {:ok, %{parameters: [String.t()]}} | {:error, any()}
-  def parse_query_string(query_string) do
-    with {:ok, declared_params} <- Logflare.Sql.parameters(query_string) do
-      {:ok, %{parameters: declared_params}}
+  @spec parse_query_string(:bq_sql | :pg_sql, String.t(), [Query.t()], [Alert.t()]) ::
+          {:ok, %{parameters: [String.t()], expanded_query: String.t()}} | {:error, any()}
+  def parse_query_string(language, query_string, endpoints, alerts)
+      when language in [:bq_sql, :pg_sql] do
+    with {:ok, expanded_query} <-
+           Logflare.Sql.expand_subqueries(
+             language,
+             query_string,
+             endpoints ++ alerts
+           ),
+         {:ok, declared_params} <- Logflare.Sql.parameters(expanded_query) do
+      {:ok, %{parameters: declared_params, expanded_query: expanded_query}}
     end
   end
 
@@ -212,9 +221,14 @@ defmodule Logflare.Endpoints do
   """
   @spec run_cached_query(Query.t(), map()) :: run_query_return()
   def run_cached_query(query, params \\ %{}) do
-    query
-    |> Resolver.resolve(params)
-    |> Cache.query()
+    if query.cache_duration_seconds > 0 do
+      query
+      |> Resolver.resolve(params)
+      |> Cache.query()
+    else
+      # execute the query directly
+      run_query(query, params)
+    end
   end
 
   defp exec_query_on_backend(
@@ -288,7 +302,10 @@ defmodule Logflare.Endpoints do
            bq_params,
            parameterMode: "NAMED",
            maxResults: endpoint_query.max_limit,
-           location: endpoint_query.user.bigquery_dataset_location
+           location: endpoint_query.user.bigquery_dataset_location,
+           labels: %{
+             "endpoint_id" => endpoint_query.id
+           }
          ) do
       {:ok, result} ->
         {:ok, result}

@@ -26,9 +26,10 @@ defmodule Logflare.UsersTest do
 
   describe "Users.list_users/1" do
     test "lists all users created by a partner" do
-      [user | others] = insert_list(3, :user)
-      insert(:partner, users: others)
-      partner = insert(:partner, users: [user])
+      partner_other = insert(:partner)
+      insert_list(3, :user, partner: partner_other)
+      partner = insert(:partner)
+      user = insert(:user, partner: partner)
 
       assert [user_result] = Users.list_users(partner_id: partner.id)
       assert user_result.id == user.id
@@ -39,6 +40,14 @@ defmodule Logflare.UsersTest do
       insert(:user, metadata: %{"a" => "123"})
       assert [_] = Users.list_users(metadata: %{"a" => "123"})
     end
+  end
+
+  test "delete_user/1" do
+    user = insert(:user)
+    insert(:alert, user: user)
+    insert(:source, user: user)
+    insert(:endpoint, user: user)
+    assert {:ok, _} = Users.delete_user(user)
   end
 
   test "users_count/0 returns user count" do

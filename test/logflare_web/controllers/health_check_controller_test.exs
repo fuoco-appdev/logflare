@@ -29,7 +29,19 @@ defmodule LogflareWeb.HealthCheckControllerTest do
            } = json_response(conn, 200)
   end
 
-  test "coming_up while RLS boot warming", %{conn: conn} do
+  test "memory check", %{conn: conn} do
+    insert(:user)
+    insert(:plan)
+    start_supervised!(Source.Supervisor)
+
+    conn =
+      conn
+      |> get("/health")
+
+    assert %{"memory_utilization" => "ok"} = json_response(conn, 200)
+  end
+
+  test "coming_up while SourceSup boot warming", %{conn: conn} do
     user = insert(:user)
     insert(:plan)
 

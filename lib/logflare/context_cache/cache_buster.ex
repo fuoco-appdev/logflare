@@ -3,6 +3,26 @@ defmodule Logflare.ContextCache.CacheBuster do
     Monitors our Postgres replication log and busts the cache accordingly.
   """
 
+  # worker process
+  defmodule Worker do
+    use GenServer
+    alias Logflare.ContextCache
+
+    def start_link(init_args) do
+      GenServer.start_link(__MODULE__, init_args)
+    end
+
+    def init(state) do
+      {:ok, state}
+    end
+
+    def handle_cast({:to_bust, context_pkeys}, state) do
+      ContextCache.bust_keys(context_pkeys)
+      {:noreply, state}
+    end
+  end
+
+  # main process
   use GenServer
 
   require Logger
@@ -14,9 +34,16 @@ defmodule Logflare.ContextCache.CacheBuster do
     GenServer.start_link(__MODULE__, init_args, name: __MODULE__)
   end
 
-  def init(state) do
+  def init(_state) do
     subscribe_to_transactions()
-    {:ok, state}
+
+    {:ok, _pid} =
+      PartitionSupervisor.start_link(
+        child_spec: __MODULE__.Worker,
+        name: __MODULE__.Supervisor
+      )
+
+    {:ok, %{partitions: System.schedulers_online()}}
   end
 
   def subscribe_to_transactions do
@@ -27,6 +54,8 @@ defmodule Logflare.ContextCache.CacheBuster do
   Sets the Logger level for this process. It's started with level :error.
 
   To debug wal records set process to level :debug and each transaction will be logged.
+
+  iex> Logflare.ContextCache.CacheBuster.set_log_level(:debug)
   """
 
   @spec set_log_level(Logger.levels()) :: :ok
@@ -55,7 +84,12 @@ defmodule Logflare.ContextCache.CacheBuster do
       records ->
         :telemetry.execute([:logflare, :cache_buster, :to_bust], %{count: length(records)})
     end)
-    |> ContextCache.bust_keys()
+    |> then(fn records ->
+      GenServer.cast(
+        {:via, PartitionSupervisor, {__MODULE__.Supervisor, records}},
+        {:to_bust, records}
+      )
+    end)
 
     {:noreply, state}
   end

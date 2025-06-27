@@ -10,7 +10,11 @@ defmodule LogflareWeb.Router do
   alias LogflareWeb.JsonParser
   alias LogflareWeb.SyslogParser
   alias LogflareWeb.NdjsonParser
-  alias LogflareWeb.OtelProtobufParser
+  alias LogflareWeb.ProtobufParser
+
+  alias Opentelemetry.Proto.Collector.Trace.V1.ExportTraceServiceRequest
+  alias Opentelemetry.Proto.Collector.Metrics.V1.ExportMetricsServiceRequest
+  alias Opentelemetry.Proto.Collector.Logs.V1.ExportLogsServiceRequest
 
   # TODO: move plug calls in SourceController and RuleController into here
 
@@ -58,7 +62,7 @@ defmodule LogflareWeb.Router do
     plug(LogflareWeb.Plugs.MaybeContentTypeToJson)
 
     plug(Plug.Parsers,
-      parsers: [JsonParser, BertParser, SyslogParser, NdjsonParser, OtelProtobufParser],
+      parsers: [JsonParser, BertParser, SyslogParser, NdjsonParser],
       json_decoder: Jason,
       body_reader: {PlugCaisson, :read_body, []},
       length: 12_000_000
@@ -67,6 +71,19 @@ defmodule LogflareWeb.Router do
     plug(:accepts, ["json", "bert"])
     plug(LogflareWeb.Plugs.SetHeaders)
     plug(OpenApiSpex.Plug.PutApiSpec, module: LogflareWeb.ApiSpec)
+  end
+
+  pipeline :otlp_api do
+    plug(Plug.RequestId)
+
+    plug(Plug.Parsers,
+      parsers: [ProtobufParser],
+      body_reader: {PlugCaisson, :read_body, []},
+      length: 12_000_000
+    )
+
+    plug(:accepts, ["protobuf"])
+    plug(LogflareWeb.Plugs.SetHeaders)
   end
 
   pipeline :require_endpoint_auth do
@@ -148,6 +165,7 @@ defmodule LogflareWeb.Router do
 
   scope "/", LogflareWeb do
     pipe_through(:browser)
+
     get("/", MarketingController, :index)
     get("/pricing", MarketingController, :pricing)
     get("/terms", MarketingController, :terms)
@@ -157,6 +175,7 @@ defmodule LogflareWeb.Router do
 
   scope "/guides", LogflareWeb do
     pipe_through(:browser)
+
     get("/", MarketingController, :guides)
     get("/overview", MarketingController, :overview)
     get("/bigquery-setup", MarketingController, :big_query_setup)
@@ -168,6 +187,7 @@ defmodule LogflareWeb.Router do
 
   scope "/", LogflareWeb do
     pipe_through([:browser, :require_auth])
+
     get("/dashboard", SourceController, :dashboard)
     live("/access-tokens", AccessTokensLive, :index)
     live("/backends", BackendsLive, :index)
@@ -298,7 +318,7 @@ defmodule LogflareWeb.Router do
 
     post("/", BillingController, :create)
     delete("/", BillingController, :delete)
-    live("/edit", BillingAccountLive, :edit)
+    live("/edit", BillingAccountLive.Edit, :edit)
     get("/sync", BillingController, :sync)
   end
 
@@ -447,6 +467,7 @@ defmodule LogflareWeb.Router do
   scope "/api/endpoints", LogflareWeb, assigns: %{resource_type: :endpoint} do
     pipe_through([:api, :require_endpoint_auth])
     get("/query/:token_or_name", EndpointsController, :query)
+    post("/query/:token_or_name", EndpointsController, :query)
 
     # deprecated
     get("/query/name/:name", EndpointsController, :query)
@@ -459,8 +480,28 @@ defmodule LogflareWeb.Router do
   end
 
   scope "/v1", LogflareWeb, assigns: %{resource_type: :source} do
-    pipe_through([:api, :require_ingest_api_auth])
-    post("/traces", LogController, :otel_traces)
+    pipe_through([:otlp_api, :require_ingest_api_auth])
+
+    post(
+      "/traces",
+      LogController,
+      :otel_traces,
+      assigns: %{protobuf_schema: ExportTraceServiceRequest}
+    )
+
+    post(
+      "/metrics",
+      LogController,
+      :otel_metrics,
+      assigns: %{protobuf_schema: ExportMetricsServiceRequest}
+    )
+
+    post(
+      "/logs",
+      LogController,
+      :otel_logs,
+      assigns: %{protobuf_schema: ExportLogsServiceRequest}
+    )
   end
 
   for path <- ["/logs", "/api/logs", "/api/events"] do

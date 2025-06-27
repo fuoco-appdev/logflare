@@ -65,7 +65,14 @@ defmodule Logflare.EndpointsTest do
 
   test "parse_query_string/1" do
     assert {:ok, %{parameters: ["testing"]}} =
-             Endpoints.parse_query_string("select @testing as date")
+             Endpoints.parse_query_string(:bq_sql, "select @testing as date", [], [])
+  end
+
+  test "parse_query_string/1 for nested queries" do
+    nested = insert(:endpoint, name: "nested", query: "select @other as date")
+
+    assert {:ok, %{parameters: ["other"]}} =
+             Endpoints.parse_query_string(:bq_sql, "select date from `nested`", [nested], [])
   end
 
   test "create endpoint with normal source name" do
@@ -121,14 +128,24 @@ defmodule Logflare.EndpointsTest do
 
   describe "running queries in bigquery backends" do
     test "run an endpoint query without caching" do
-      expect(GoogleApi.BigQuery.V2.Api.Jobs, :bigquery_jobs_query, 1, fn _conn, _proj_id, _opts ->
+      pid = self()
+
+      expect(GoogleApi.BigQuery.V2.Api.Jobs, :bigquery_jobs_query, 1, fn _conn, _proj_id, opts ->
+        send(pid, opts[:body].labels)
         {:ok, TestUtils.gen_bq_response([%{"testing" => "123"}])}
       end)
 
       user = insert(:user)
       insert(:source, user: user, name: "c")
-      endpoint = insert(:endpoint, user: user, query: "select current_datetime() as testing")
+
+      %{id: endpoint_id} =
+        endpoint = insert(:endpoint, user: user, query: "select current_datetime() as testing")
+
       assert {:ok, %{rows: [%{"testing" => _}]}} = Endpoints.run_query(endpoint)
+
+      assert_received %{
+        "endpoint_id" => ^endpoint_id
+      }
     end
 
     test "run an endpoint query with query composition" do
@@ -168,8 +185,34 @@ defmodule Logflare.EndpointsTest do
       end)
 
       user = insert(:user)
-      endpoint = insert(:endpoint, user: user, query: "select current_datetime() as testing")
+
+      endpoint =
+        insert(:endpoint,
+          user: user,
+          query: "select current_datetime() as testing",
+          cache_duration_seconds: 4
+        )
+
       _pid = start_supervised!({Logflare.Endpoints.Cache, {endpoint, %{}}})
+      assert {:ok, %{rows: [%{"testing" => _}]}} = Endpoints.run_cached_query(endpoint)
+      # 2nd query should hit local cache
+      assert {:ok, %{rows: [%{"testing" => _}]}} = Endpoints.run_cached_query(endpoint)
+    end
+
+    test "run_cached_query/1 with cache disabled" do
+      expect(GoogleApi.BigQuery.V2.Api.Jobs, :bigquery_jobs_query, 2, fn _conn, _proj_id, _opts ->
+        {:ok, TestUtils.gen_bq_response([%{"testing" => "123"}])}
+      end)
+
+      user = insert(:user)
+
+      endpoint =
+        insert(:endpoint,
+          user: user,
+          query: "select current_datetime() as testing",
+          cache_duration_seconds: 0
+        )
+
       assert {:ok, %{rows: [%{"testing" => _}]}} = Endpoints.run_cached_query(endpoint)
       # 2nd query should hit local cache
       assert {:ok, %{rows: [%{"testing" => _}]}} = Endpoints.run_cached_query(endpoint)

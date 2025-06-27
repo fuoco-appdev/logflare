@@ -12,7 +12,7 @@ defmodule LogflareWeb.AccessTokensLive do
       <:path>
         ~/accounts/<.subheader_path_link live_patch to={~p"/access-tokens"}>access tokens</.subheader_path_link>
       </:path>
-      <.subheader_link to="https://docs.logflare.app/concepts/access-tokens/" text="docs" fa_icon="book" />
+      <.subheader_link to="https://docs.logflare.app/concepts/access-tokens/" external={true} text="docs" fa_icon="book" />
     </.subheader>
 
     <section class="content container mx-auto tw-flex tw-flex-col w-full tw-gap-4">
@@ -188,17 +188,19 @@ defmodule LogflareWeb.AccessTokensLive do
       "Creating access token for user, user_id=#{inspect(user.id)}, params: #{inspect(params)}"
     )
 
-    scopes_main = Map.get(params, "scopes_main") || []
-    scopes_ingest = Map.get(params, "scopes_ingest") || []
-    scopes_query = Map.get(params, "scopes_query") || []
+    scopes_ingest_params = (Map.get(params, "scopes_ingest") || []) |> Enum.filter(&(&1 != ""))
+    scopes_query_params = (Map.get(params, "scopes_query") || []) |> Enum.filter(&(&1 != ""))
+    scopes_main_params = (Map.get(params, "scopes_main") || []) |> Enum.filter(&(&1 != ""))
 
     scopes_main =
-      if scopes_ingest != [], do: Enum.filter(scopes_main, &(&1 != "ingest")), else: scopes_main
+      if scopes_ingest_params != [],
+        do: List.delete(scopes_main_params, "ingest"),
+        else: scopes_main_params
 
     scopes_main =
-      if scopes_query != [], do: Enum.filter(scopes_main, &(&1 != "query")), else: scopes_main
+      if scopes_query_params != [], do: List.delete(scopes_main, "query"), else: scopes_main
 
-    scopes = scopes_main ++ scopes_ingest ++ scopes_query
+    scopes = scopes_main ++ scopes_ingest_params ++ scopes_query_params
 
     attrs =
       Map.take(params, ["description"])

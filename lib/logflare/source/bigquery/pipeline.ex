@@ -23,11 +23,12 @@ defmodule Logflare.Source.BigQuery.Pipeline do
   alias Logflare.Users
   alias Logflare.PubSubRates
 
-  # each batch should at most be 5MB
+  require OpenTelemetry.Tracer
+
   # BQ max is 10MB
   # https://cloud.google.com/bigquery/quotas#streaming_inserts
-  @max_batch_length 5_000_000
-  @max_batch_size 300
+  @max_batch_length 6_000_000
+  @max_batch_size 500
 
   def start_link(args, opts \\ []) do
     {name, args} = Keyword.pop(args, :name)
@@ -41,7 +42,7 @@ defmodule Logflare.Source.BigQuery.Pipeline do
           # top-level will apply to all children
           hibernate_after: 5_000,
           spawn_opt: [
-            fullsweep_after: 10
+            fullsweep_after: 15
           ],
           producer: [
             module:
@@ -55,11 +56,11 @@ defmodule Logflare.Source.BigQuery.Pipeline do
                [ref: {{source.id, backend.id, args[:pipeline_ref]}, source.token}]}
           ],
           processors: [
-            default: [concurrency: 4, max_demand: 100]
+            default: [concurrency: 8, max_demand: 100]
           ],
           batchers: [
             bq: [
-              concurrency: 8,
+              concurrency: 16,
               batch_size: bq_batch_size_splitter(),
               batch_timeout: 1_500,
               # must be set when using custom batch_size splitter
@@ -132,7 +133,17 @@ defmodule Logflare.Source.BigQuery.Pipeline do
       }
     )
 
-    stream_batch(context, messages)
+    OpenTelemetry.Tracer.with_span :bigquery_pipeline, %{
+      attributes: %{
+        source_id: context.source_id,
+        source_token: context.source_token,
+        backend_id: context.backend_id,
+        ingest_batch_size: batch_info.size,
+        ingest_batch_trigger: batch_info.trigger
+      }
+    } do
+      stream_batch(context, messages)
+    end
   end
 
   def le_messages_to_bq_rows(messages) do

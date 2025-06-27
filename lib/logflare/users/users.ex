@@ -10,7 +10,6 @@ defmodule Logflare.Users do
   alias Logflare.TeamUsers.TeamUser
   alias Logflare.User
   alias Logflare.Users
-  alias Logflare.Partners.PartnerUser
   alias Logflare.Users.UserPreferences
 
   @max_limit 100
@@ -61,13 +60,26 @@ defmodule Logflare.Users do
     |> Enum.reduce(from(u in User), fn
       {:partner_id, id}, q when is_integer(id) ->
         q
-        |> join(:inner, [u], pu in PartnerUser, on: pu.user_id == u.id and pu.partner_id == ^id)
+        |> where([u], u.partner_id == ^id)
 
       {:metadata, %{} = filters}, q ->
         Enum.reduce(filters, q, fn {filter_k, v}, acc ->
           normalized_k = if is_atom(filter_k), do: Atom.to_string(filter_k), else: filter_k
           where(acc, [u], fragment("? -> ?", u.metadata, ^normalized_k) == ^v)
         end)
+
+      {:provider, :google}, q ->
+        where(q, [u], u.provider == "google" and u.valid_google_account != false)
+
+      {:paying, true}, q ->
+        join(q, :left, [u], ba in assoc(u, :billing_account))
+        |> where(
+          [u, ..., ba],
+          (not is_nil(ba.stripe_subscriptions) and
+             fragment("jsonb_array_length(? -> 'data')", ba.stripe_subscriptions) > 0) or
+            (is_nil(ba) and u.billing_enabled) == false or
+            ba.lifetime_plan == true
+        )
 
       _, q ->
         q
@@ -116,6 +128,13 @@ defmodule Logflare.Users do
 
   def preload_team(user) do
     Repo.preload(user, :team)
+  end
+
+  def preload_valid_google_team_users(user) do
+    query =
+      from(tu in TeamUser, where: tu.valid_google_account != false and tu.provider == "google")
+
+    Repo.preload(user, team: [team_users: query])
   end
 
   def preload_billing_account(user) do

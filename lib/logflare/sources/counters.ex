@@ -44,12 +44,6 @@ defmodule Logflare.Sources.Counters do
     {:ok, table}
   end
 
-  @spec increment_ets_count(atom, non_neg_integer) :: success_tuple
-  def increment_ets_count(table, count) do
-    :ets.update_counter(@ets_table_name, table, {2, count}, make_default(table))
-    {:ok, table}
-  end
-
   @spec increment_bq_count(atom, non_neg_integer) :: success_tuple
   def increment_bq_count(table, count) do
     :ets.update_counter(@ets_table_name, table, {4, count}, make_default(table))
@@ -114,7 +108,7 @@ defmodule Logflare.Sources.Counters do
     end
   end
 
-  # Deprecated: should be the count of things in the RecentLogsServer ets table but never could get things inrementing / decrementing correctly.
+  # Deprecated: should be the count of things in the RecentEventsTouch ets table but never could get things inrementing / decrementing correctly.
   @spec log_count(Source.t() | atom) :: non_neg_integer
   def log_count(%Source{token: token}) do
     log_count(token)

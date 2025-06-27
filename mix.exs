@@ -123,8 +123,8 @@ defmodule Logflare.Mixfile do
       {:earmark, "~> 1.4.33"},
 
       # Outbound Requests
-      {:castore, "~> 0.1.0"},
-      {:finch, "~> 0.18.0"},
+      {:castore, "~> 1.0"},
+      {:finch, "~> 0.19.0"},
       {:mint, "~> 1.0"},
       {:httpoison, "~> 1.4"},
       {:poison, "~> 5.0.0", override: true},
@@ -133,13 +133,14 @@ defmodule Logflare.Mixfile do
       {:tesla, "~> 1.6"},
 
       # Concurrency and pipelines
-      {:broadway, github: "Logflare/broadway", branch: "fix/safe-crud"},
+      {:broadway, github: "Logflare/broadway", branch: "fix/batcher-fullsweep-after"},
       {:syn, "~> 3.3"},
 
       # Test
       {:mix_test_watch, "~> 1.0", only: [:dev, :test], runtime: false},
+      {:phoenix_test, "~> 0.7.0", only: :test, runtime: false},
       {:mimic, "~> 1.0", only: [:dev, :test]},
-      {:stream_data, "~> 0.6.0", only: [:dev, :test]},
+      {:stream_data, "~> 1.2.0", only: [:dev, :test]},
 
       # Pagination
       {:scrivener_ecto, "~> 2.2"},
@@ -149,13 +150,20 @@ defmodule Logflare.Mixfile do
       # GCP
       {:google_api_cloud_resource_manager, "~> 0.34.0"},
       {:google_api_big_query, "~> 0.79.0"},
-      {:goth, "~> 1.4.0"},
+      {:google_api_iam, "~> 0.45.0"},
+      {:goth, github: "Logflare/goth", branch: "feat/service-account-impersonation"},
       {:google_gax, github: "Logflare/elixir-google-gax", ref: "6772193", override: true},
 
       # Ecto
       {:ecto, "~> 3.9", override: true},
       {:ecto_sql, "~> 3.9"},
       {:typed_ecto_schema, "~> 0.1.0", runtime: false},
+
+      # ClickHouse
+      {:ch, "~> 0.3.2"},
+
+      # DataFrames
+      {:explorer, "~> 0.10.1"},
 
       # Telemetry & logging
       {:telemetry, "~> 1.0"},
@@ -168,10 +176,10 @@ defmodule Logflare.Mixfile do
       {:ets, "~> 0.8.0"},
 
       # HTML
-      {:floki, "~> 0.29.0", only: [:test]},
+      {:floki, "~> 0.38.0", only: [:test]},
 
       # Rust NIFs
-      {:rustler, "~> 0.29.0"},
+      {:rustler, "~> 0.34.0"},
 
       # Frontend
       {:phoenix_live_react, "~> 0.4"},
@@ -208,7 +216,7 @@ defmodule Logflare.Mixfile do
       {:plug_cowboy, "~> 2.0"},
 
       # alerts feature
-      {:citrine, "~> 0.1.0"},
+      {:quantum, "~> 3.0"},
       {:crontab, "~> 1.1"},
 
       # benchmarking
@@ -226,6 +234,7 @@ defmodule Logflare.Mixfile do
       {:opentelemetry_exporter, "~> 1.6"},
       {:opentelemetry_phoenix, "~> 2.0.0-rc.2"},
       {:opentelemetry_bandit, "~> 0.2.0-rc.1"},
+      {:otel_metric_exporter, "~> 0.3.6"},
       {:live_monaco_editor, "~> 0.1"}
     ]
   end

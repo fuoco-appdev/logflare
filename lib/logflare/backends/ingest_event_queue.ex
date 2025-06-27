@@ -132,16 +132,14 @@ defmodule Logflare.Backends.IngestEventQueue do
 
     procs = Enum.map(proc_counts, fn {key, _count} -> key end)
 
-    procs_length = Enum.count(procs)
-
-    if procs_length == 0 do
+    if procs == [] do
       # not yet started, add to startup queue
       add_to_table({sid, bid, nil}, batch)
     else
       Logflare.Utils.chunked_round_robin(
         batch,
         procs,
-        250,
+        50,
         fn chunk, target ->
           add_to_table(target, chunk)
         end
@@ -222,6 +220,20 @@ defmodule Logflare.Backends.IngestEventQueue do
       end,
       []
     )
+  end
+
+  @doc """
+  Deletes the queue associated with the given source-backend-pid.
+  """
+  @spec delete_queue(source_backend_pid()) :: :ok | {:error, :not_initialized}
+  def delete_queue(sid_bid_pid) do
+    with tid when tid != nil <- get_tid(sid_bid_pid) do
+      :ets.delete(tid)
+      :ets.delete(@ets_table_mapper, sid_bid_pid)
+      :ok
+    else
+      nil -> {:error, :not_initialized}
+    end
   end
 
   @doc """
